@@ -1,13 +1,20 @@
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import LabelEncoder
+
 from imblearn.over_sampling import SMOTE, RandomOverSampler, SMOTENC, SMOTEN 
+from sklearn.utils import resample
 from imblearn.under_sampling import RandomUnderSampler
+
 from sklearn.model_selection import train_test_split
 
 from sklearn.preprocessing import KBinsDiscretizer
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
+
 from sklearn.impute import KNNImputer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
 
 class Preprocessor:
     def __init__(self):
@@ -45,6 +52,13 @@ class Preprocessor:
         """
         if imputation_strategy == 'None':
             return df_h
+        
+        elif imputation_strategy == 'mice': # Multiple Imputation by Chained Equations
+            # df_h2 = df_h.copy(deep=True)
+            imputer = IterativeImputer()
+            df_h = pd.DataFrame(imputer.fit_transform(df_h),columns = df_h.columns)
+
+
         elif imputation_strategy == 'mean':
             for col in df_h.columns:
                 if df_h[col].dtype != 'object':
@@ -53,12 +67,19 @@ class Preprocessor:
             for col in df_h.columns:
                 if df_h[col].dtype != 'object':
                     df_h[col] = df_h[col].fillna(df_h[col].median())
-        elif imputation_strategy == 'mode':
+        elif imputation_strategy == 'mode': # numeric: mode
             for col in df_h.columns:
                 if df_h[col].dtype != 'object':
                     df_h[col] = df_h[col].fillna(df_h[col].mode()[0]) 
+
+        elif imputation_strategy == 'mode_': # categorical: mode
+            for col in df_h.columns:
+                if df_h[col].dtype == 'object':
+                    df_h[col] = df_h[col].fillna(df_h[col].mode()[0])
+
         elif imputation_strategy == 'drop':
             df_h = df_h.dropna()
+            print('After dropping missing values: ', df_h.shape)
         elif imputation_strategy == 'knn':
             # if self.imputer is None:
             categorical_cols = df_h.select_dtypes(include='object').columns
@@ -124,9 +145,11 @@ class Preprocessor:
         return df_h
 
     def imputation_types(self):
-        return ['mean', 
+        return ['mice',
+                'mean', 
                     'median', 
                     'mode', 
+                    'mode_',
                     'drop', 
                     'knn', 
                     'interpolate', 
@@ -158,10 +181,17 @@ class Preprocessor:
             for col in df_h.columns:
                 df_h[col] = df_h[col].astype('category')
                 df_h[col] = df_h[col].cat.codes
+                # TODO why?
+                # df_h.loc[:, col] = df_h.loc[:, col].astype('category').cat.codes
+        elif encoding_strategy == 'label':
+            for col in df_h.columns:
+                if df_h[col].dtype == 'object':
+                    label_encoder = LabelEncoder()
+                    df_h[col] = label_encoder.fit_transform(df_h[col])
         return df_h
     
     def encoding_types(self):
-        return ['onehot', 'ordinal', 'None']
+        return ['onehot', 'ordinal', 'label', 'None']
 
 
     def scale(self, df_h: pd.DataFrame, scaling_strategy='standard'):
@@ -267,10 +297,17 @@ class Preprocessor:
             X_resampled, y_resampled = self.sampler.fit_resample(X, y)
             df_h = pd.concat([X_resampled, y_resampled], axis=1)
 
+        elif sampling_strategy == 'sklearn':
+            neg = df_h[df_h['RainTomorrow'] == 0]
+            pos = df_h[df_h['RainTomorrow'] == 1]
+            pos_upsampled = resample(pos, replace=True, n_samples=len(neg), random_state=0) # TODO random state
+            df_h = pd.concat([neg, pos_upsampled])
+
+
         return df_h
     
     def sampling_types(self):
-        return ['smote', 'random', 'smotenc', 'smoten', 'under', 'None']
+        return ['smote', 'random', 'smotenc', 'smoten', 'under', 'sklearn', 'None']
     
 
     def sampleXy(self, X:np.ndarray, y:np.ndarray, sampling_strategy='smote'):
@@ -303,7 +340,14 @@ class Preprocessor:
             self.sampler = RandomUnderSampler(random_state=0)
             X_resampled, y_resampled = self.sampler.fit_resample(X, y)
             return X_resampled, y_resampled
-        
+        elif sampling_strategy == 'sklearn':
+            df_h = pd.concat([pd.DataFrame(X), pd.DataFrame(y)], axis=1)
+            neg = df_h[df_h['RainTomorrow'] == 0]
+            pos = df_h[df_h['RainTomorrow'] == 1]
+            pos_upsampled = resample(pos, replace=True, n_samples=len(neg), random_state=0) # TODO random state
+            df_h = pd.concat([neg, pos_upsampled])
+            X = df_h.iloc[:, :-1]
+            y = df_h.iloc[:, -1]
         return X, y
     
 
@@ -355,6 +399,14 @@ class Preprocessor:
         """
         if replace_strategy == 'None':
             return df_h
+        if replace_strategy == 'drop':
+            Q1 = df_h.quantile(0.25)
+            Q3 = df_h.quantile(0.75)
+            IQR = Q3 - Q1
+            df_h = df_h[~((df_h < (Q1 - 1.5 * IQR)) |(df_h > (Q3 + 1.5 * IQR))).any(axis=1)]
+            print('After dropping outliers: ', df_h.shape)
+            return df_h
+        
         for col in df_h.columns:
             if df_h[col].dtype != 'object':
                 q1 = df_h[col].quantile(0.25)
@@ -362,10 +414,10 @@ class Preprocessor:
                 iqr = q3 - q1
                 lower_bound = q1 -(1.5 * iqr)
                 upper_bound = q3 +(1.5 * iqr)
-                if replace_strategy == 'drop':
-                    df_h = df_h[df_h[col] < upper_bound]
-                    df_h = df_h[df_h[col] > lower_bound]
-                elif replace_strategy == 'mean':
+                # if replace_strategy == 'drop':
+                #     df_h = df_h[df_h[col] < upper_bound]
+                #     df_h = df_h[df_h[col] > lower_bound]
+                if replace_strategy == 'mean':
                     cond = (df_h[col] > upper_bound) | (df_h[col] < lower_bound)
                     df_h.loc[cond, col] = df_h[col].mean()
 
@@ -376,6 +428,9 @@ class Preprocessor:
                     cond = (df_h[col] > upper_bound) | (df_h[col] < lower_bound)
                     df_h.loc[cond, col] = df_h[col].mode()[0]
 
+        # if replace_strategy == 'drop':
+        #     print('After dropping outliers: ', df_h.shape)
+        
         return df_h
     
     def outlier_types(self):
@@ -406,41 +461,38 @@ class Preprocessor:
         return df_h
     
 
-    def _preprocess(self, df_h, date_col = 'Date', imputation_strategy='mode_mean', encoding_strategy='ordinal', scaling_strategy='standard', sampling_strategy='None', discretize_strategy='None', outlier_strategy='median'):
+    def preprocess(self, df_h: pd.DataFrame, imputation_strategy='mode_',imputation_strategy2='mice', encoding_strategy='label', scaling_strategy='standard', sampling_strategy='sklearn', outlier_strategy='drop'):
         """
         Preprocess the dataset
         """
-        df_h = self.handleDate(df_h, date_col)
-        if imputation_strategy is not None:
-            df_h = self.impute(df_h, imputation_strategy)
-        if outlier_strategy is not None:
-            df_h = self.outlier(df_h, outlier_strategy)
-        if encoding_strategy is not None:
-            df_h = self.encode(df_h, encoding_strategy)
-        X_train, X_test, y_train, y_test = self.split(df_h)
-        if sampling_strategy is not None:
-            X_train, y_train = self.sampleXy(X_train, y_train, sampling_strategy)
-        if scaling_strategy is not None:
-            X_train = self.scaleX(X_train, scaling_strategy)
-            if self.scaler is not None:
-                X_test = self.scaler.transform(X_test)
-        if discretize_strategy is not None:
-            X_train = self.discretizeX(X_train, discretize_strategy)
-            if self.discretizer is not None:
-                X_test = self.discretizer.transform(X_test)
+        df_p = df_h.copy(deep=True)
+        # map the target variable to 0 and 1
+        df_p['RainToday'] = df_p['RainToday'].map({'Yes': 1, 'No': 0})
+        df_p['RainTomorrow'] = df_p['RainTomorrow'].map({'Yes': 1, 'No': 0})
+
+        # sample 
+        df_p = self.sample(df_p, sampling_strategy=sampling_strategy)
+
+        # impute categorical
+        df_p = self.impute(df_p, imputation_strategy=imputation_strategy)
+
+        # encode
+        df_p = self.encode(df_p, encoding_strategy=encoding_strategy)
+
+        # impute numerical
+        df_p=  self.impute(df_p, imputation_strategy=imputation_strategy2)
+
+        # outlier
+        df_p = self.outlier(df_p, replace_strategy=outlier_strategy)
+
+        # split
+        X_train, X_test, y_train, y_test = self.split(df_p)
+
+        # scale
+        X_train = self.scaleX(X_train, scaling_strategy=scaling_strategy)
+        X_test = self.scaleX(X_test, scaling_strategy=scaling_strategy)
 
         return X_train, X_test, y_train, y_test
-        # if scaling_strategy is not None:
-        #     df_h = self.scale(df_h, scaling_strategy)
-        # print('scaling ==========')
-        # print('imputation =======')
-        # if discretize_strategy is not None:
-        #     df_h = self.discretize(df_h, discretize_strategy)
-        # print('discretization ===')
-        # if sampling_strategy is not None:
-        #     df_h = self.sample(df_h, sampling_strategy)            
-        # print('sampling =========')
-        # return df_h
     
 
     def split(self, df_p: pd.DataFrame, test_size=0.2, random_state=42):
@@ -452,7 +504,3 @@ class Preprocessor:
                                           df_p['RainTomorrow'], 
                                           test_size=test_size, 
                                           random_state=random_state)
-        # X = df_h.iloc[:, :-1]
-        # y = df_h.iloc[:, -1]
-        # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
-        # return X_train, X_test, y_train, y_test
