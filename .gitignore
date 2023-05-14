@@ -1,3 +1,4 @@
 *.log
 notes.md
 __pycache__
+RF_datasets/*
