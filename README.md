@@ -1,6 +1,8 @@
 # BigTATA
 
-![BigTATA](pics/BigTATA.jpg)
+<p align="center">
+  <img src="pics/BigTATA.jpg" alt="Logo" width="600" height="400"/>
+</p>
 
 ## Description
 Rain in Australia
